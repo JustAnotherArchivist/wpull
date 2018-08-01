@@ -95,6 +95,14 @@ class BaseSQLURLTable(BaseURLTable):
                 query = insert(URL).prefix_with('OR IGNORE').values(bind_values)
 
             if session.bind.dialect.name == 'postgresql':
+                # In PostgreSQL with concurrent transactions, we need to insert the URLs in the a consistent order.
+                # If we don't, we will end in a deadlock eventually, where transaction 1 writes URL 1, then
+                # transaction 2 writes URL 2 and attempts to write URL 1, then transaction 1 attempts to write URL 2.
+                # In that scenario, both transactions block each other.
+                # The easiest way to avoid this is to ensure that URLs are always inserted in a specific order.
+                # A deadlock as described above then becomes impossible.
+                # Cf. https://dba.stackexchange.com/a/195220
+                new_urls = sorted(new_urls, key = lambda x: x['url'])
                 session.execute(query, new_urls)
                 # TODO: Return inserted rows
                 return []
