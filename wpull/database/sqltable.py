@@ -10,6 +10,7 @@ from sqlalchemy.orm.session import sessionmaker
 from sqlalchemy.pool import SingletonThreadPool
 from sqlalchemy.sql.expression import insert, update, select, and_, delete, \
     bindparam
+from sqlalchemy.dialects.postgresql import insert as insert_pgsql
 from sqlalchemy.sql.functions import func
 import sqlalchemy.event
 
@@ -79,7 +80,10 @@ class BaseSQLURLTable(BaseURLTable):
             url_strings.append(top_url)
 
         with self._session() as session:
-            query = insert(URLString).prefix_with('OR IGNORE')
+            if session.bind.dialect.name == 'postgresql':
+                query = insert_pgsql(URLString).on_conflict_do_nothing()
+            else:
+                query = insert(URLString).prefix_with('OR IGNORE')
             session.execute(query, [{'url': url} for url in url_strings])
 
             bind_values = dict(status=Status.todo)
@@ -95,7 +99,10 @@ class BaseSQLURLTable(BaseURLTable):
                 bind_values['top_url_str_id'] = select([URLString.id])\
                     .where(URLString.url == bindparam('top_url'))
 
-            query = insert(URL).prefix_with('OR IGNORE').values(bind_values)
+            if session.bind.dialect.name == 'postgresql':
+                query = insert_pgsql(URL).on_conflict_do_nothing().values(bind_values)
+            else:
+                query = insert(URL).prefix_with('OR IGNORE').values(bind_values)
 
             all_row_values = []
 
@@ -200,7 +207,7 @@ class BaseSQLURLTable(BaseURLTable):
         with self._session() as session:
             for url, warc_id, payload_digest in visits:
                 session.execute(
-                    insert(Visit).prefix_with('OR IGNORE'),
+                    insert_pgsql(Visit).on_conflict_do_nothing() if session.bind.dialect.name == 'postgresql' else insert(Visit).prefix_with('OR IGNORE'),
                     dict(
                         url=url,
                         warc_id=warc_id,
