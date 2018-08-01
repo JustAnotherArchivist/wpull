@@ -264,8 +264,7 @@ class Engine(BaseEngine, HookableMixin):
     def __call__(self):
         '''Run the engine.
 
-        This function will clear any items marked as in-progress, start up
-        the workers, and loop until a stop is requested.
+        This function will start up the workers and loop until a stop is requested.
 
         Returns:
             int: An integer describing the exit status.
@@ -277,7 +276,6 @@ class Engine(BaseEngine, HookableMixin):
         except HookDisconnected:
             pass
 
-        self._release_in_progress()
         yield From(self._run_workers())
 
     def _release_in_progress(self):
