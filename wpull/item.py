@@ -220,6 +220,9 @@ class URLItem(object):
 
         See also :meth:`.database.base.BaseSQLURLTable.add_many`.
         '''
+        for item in urls:
+            if isinstance(item, dict) and 'inline' in item:
+                item['inline'] = (self._url_record.inline or 0) + 1 if item['inline'] else None
         self._url_table.add_many(
             [item if isinstance(item, dict) else {'url': item} for item in urls],
             inline=(self._url_record.inline or 0) + 1 if inline else None,
