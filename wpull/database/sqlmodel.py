@@ -30,7 +30,7 @@ class URL(DBBase):
     status = Column(
         Enum(
             Status.done, Status.error, Status.in_progress,
-            Status.skipped, Status.todo,
+            Status.skipped, Status.todo, name = 'status'
         ),
         index=True,
         default=Status.todo,
@@ -71,7 +71,7 @@ class URL(DBBase):
     link_type = Column(
         Enum(
             LinkType.html, LinkType.css, LinkType.javascript, LinkType.media,
-            LinkType.sitemap, LinkType.file, LinkType.directory,
+            LinkType.sitemap, LinkType.file, LinkType.directory, name = 'link_type'
         ),
         doc='Expected content type of extracted link.'
     )
