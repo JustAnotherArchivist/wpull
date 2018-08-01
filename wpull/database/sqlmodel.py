@@ -18,14 +18,7 @@ class URL(DBBase):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
 
-    url_str_id = Column(
-        Integer, ForeignKey('url_strings.id'),
-        nullable=False, unique=True, index=True
-    )
-    url_str_record = relationship(
-        'URLString', uselist=False, foreign_keys=[url_str_id]
-    )
-    url = association_proxy('url_str_record', 'url')
+    url = Column(String, nullable=False, unique=True, index=True)
 
     status = Column(
         Enum(
@@ -46,22 +39,22 @@ class URL(DBBase):
         doc='Recursive depth of the item. 0 is root, 1 is child of root, etc.'
     )
 
-    top_url_str_id = Column(
-        Integer, ForeignKey('url_strings.id'),
+    top_url_id = Column(
+        Integer, ForeignKey('urls.id'),
         doc='Root URL.'
     )
     top_url_record = relationship(
-        'URLString', uselist=False, foreign_keys=[top_url_str_id])
+        'URL', uselist=False, foreign_keys=[top_url_id])
     top_url = association_proxy('top_url_record', 'url')
 
     status_code = Column(Integer, doc='HTTP status code or FTP rely code.')
 
     referrer_id = Column(
-        Integer, ForeignKey('url_strings.id'),
+        Integer, ForeignKey('urls.id'),
         doc='Parent item of this item.'
     )
     referrer_record = relationship(
-        'URLString', uselist=False, foreign_keys=[referrer_id])
+        'URL', uselist=False, foreign_keys=[referrer_id])
     referrer = association_proxy('referrer_record', 'url')
     inline = Column(
         Integer,
@@ -94,17 +87,6 @@ class URL(DBBase):
         )
 
 
-class URLString(DBBase):
-    '''Table containing the URL strings.
-
-    The :class:`URL` references this table.
-    '''
-    __tablename__ = 'url_strings'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    url = Column(String, nullable=False, unique=True, index=True)
-
-
 class Visit(DBBase):
     '''Standalone table for ``--cdx-dedup`` feature.'''
     __tablename__ = 'visits'
@@ -114,4 +96,4 @@ class Visit(DBBase):
     payload_digest = Column(String, nullable=False)
 
 
-__all__ = ('DBBase', 'URL', 'URLString', 'Visit')
+__all__ = ('DBBase', 'URL', 'Visit')

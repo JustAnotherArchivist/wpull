@@ -15,7 +15,7 @@ from sqlalchemy.sql.functions import func
 import sqlalchemy.event
 
 from wpull.database.base import BaseURLTable, NotFound
-from wpull.database.sqlmodel import URL, URLString, Visit, DBBase
+from wpull.database.sqlmodel import URL, Visit, DBBase
 from wpull.item import Status
 
 
@@ -71,64 +71,40 @@ class BaseSQLURLTable(BaseURLTable):
             return ()
 
         assert isinstance(new_urls[0], dict), type(new_urls[0])
-        url_strings = list(item['url'] for item in new_urls)
-
-        if referrer:
-            url_strings.append(referrer)
-
-        if top_url:
-            url_strings.append(top_url)
+        assert all('url' in item and 'referrer' not in item and 'top_url' not in item for item in new_urls)
 
         with self._session() as session:
-            if session.bind.dialect.name == 'postgresql':
-                query = insert_pgsql(URLString).on_conflict_do_nothing()
-            else:
-                query = insert(URLString).prefix_with('OR IGNORE')
-            session.execute(query, [{'url': url} for url in url_strings])
-
-            bind_values = dict(status=Status.todo)
-            bind_values.update(**kwargs)
-
-            bind_values['url_str_id'] = select([URLString.id])\
-                .where(URLString.url == bindparam('url'))
-
+            # Get IDs of referrer and top_url; we know that these must already exist in the DB,
+            # and they can't get modified currently (referrer will be in_progress by the current item,
+            # and top_url will be done already), so this is safe.
             if referrer:
-                bind_values['referrer_id'] = select([URLString.id])\
-                    .where(URLString.url == bindparam('referrer'))
+                referrer_id = session.query(URL).filter_by(url = referrer).first().id
+            else:
+                referrer_id = None
             if top_url:
-                bind_values['top_url_str_id'] = select([URLString.id])\
-                    .where(URLString.url == bindparam('top_url'))
+                top_url_id = session.query(URL).filter_by(url = top_url).first().id
+            else:
+                top_url_id = None
+
+            bind_values = dict(status = Status.todo, referrer_id = referrer_id, top_url_id = top_url_id)
+            bind_values.update(**kwargs)
 
             if session.bind.dialect.name == 'postgresql':
                 query = insert_pgsql(URL).on_conflict_do_nothing().values(bind_values)
             else:
                 query = insert(URL).prefix_with('OR IGNORE').values(bind_values)
 
-            all_row_values = []
+            if session.bind.dialect.name == 'postgresql':
+                session.execute(query, new_urls)
+                # TODO: Return inserted rows
+                return []
+            else:
+                last_primary_key = session.query(func.max(URL.id)).scalar() or 0
 
-            for item in new_urls:
-                assert 'url' in item
-                assert 'referrer' not in item
-                assert 'top_url' not in item
+                session.execute(query, new_urls)
 
-                row_values = item
-
-                if referrer:
-                    row_values['referrer'] = referrer
-                if top_url:
-                    row_values['top_url'] = top_url
-
-                all_row_values.append(row_values)
-
-            last_primary_key = session.query(func.max(URL.id)).scalar() or 0
-
-            session.execute(query, all_row_values)
-
-            query = select([URLString.url]).where(
-                and_(URL.id > last_primary_key,
-                     URL.url_str_id == URLString.id)
-                )
-            added_urls = [row[0] for row in session.execute(query)]
+                query = select([URL.url]).where(URL.id > last_primary_key)
+                added_urls = [row[0] for row in session.execute(query)]
 
         return added_urls
 
@@ -163,11 +139,7 @@ class BaseSQLURLTable(BaseURLTable):
             if increment_try_count:
                 values[URL.try_count] = URL.try_count + 1
 
-            # TODO: rewrite as a join for clarity
-            subquery = select([URLString.id]).where(URLString.url == url)\
-                .limit(1)
-            query = update(URL).values(values)\
-                .where(URL.url_str_id == subquery)
+            query = update(URL).values(values).where(URL.url == url)
 
             session.execute(query)
 
@@ -178,11 +150,7 @@ class BaseSQLURLTable(BaseURLTable):
             for key, value in kwargs.items():
                 values[getattr(URL, key)] = value
 
-            # TODO: rewrite as a join for clarity
-            subquery = select([URLString.id]).where(URLString.url == url)\
-                .limit(1)
-            query = update(URL).values(values)\
-                .where(URL.url_str_id == subquery)
+            query = update(URL).values(values).where(URL.url == url)
 
             session.execute(query)
 
@@ -198,9 +166,7 @@ class BaseSQLURLTable(BaseURLTable):
 
         with self._session() as session:
             for url in urls:
-                url_str_id = session.query(URLString.id)\
-                    .filter_by(url=url).scalar()
-                query = delete(URL).where(URL.url_str_id == url_str_id)
+                query = delete(URL).where(URL.url == url)
                 session.execute(query)
 
     def add_visits(self, visits):
