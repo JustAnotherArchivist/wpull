@@ -47,7 +47,7 @@ class BaseSQLURLTable(BaseURLTable):
 
     def get_one(self, url):
         with self._session() as session:
-            result = session.query(URL).filter_by(url=url).first()
+            result = session.query(URL).filter(func.md5(URL.url) == func.md5(url)).first()
 
             if not result:
                 raise NotFound()
@@ -78,11 +78,11 @@ class BaseSQLURLTable(BaseURLTable):
             # and they can't get modified currently (referrer will be in_progress by the current item,
             # and top_url will be done already), so this is safe.
             if referrer:
-                referrer_id = session.query(URL).filter_by(url = referrer).first().id
+                referrer_id = session.query(URL).filter(func.md5(URL.url) == func.md5(referrer)).first().id
             else:
                 referrer_id = None
             if top_url:
-                top_url_id = session.query(URL).filter_by(url = top_url).first().id
+                top_url_id = session.query(URL).filter(func.md5(URL.url) == func.md5(top_url)).first().id
             else:
                 top_url_id = None
 
@@ -153,7 +153,7 @@ class BaseSQLURLTable(BaseURLTable):
             if increment_try_count:
                 values[URL.try_count] = URL.try_count + 1
 
-            query = update(URL).values(values).where(URL.url == url)
+            query = update(URL).values(values).where(func.md5(URL.url) == func.md5(url))
 
             session.execute(query)
 
@@ -164,7 +164,7 @@ class BaseSQLURLTable(BaseURLTable):
             for key, value in kwargs.items():
                 values[getattr(URL, key)] = value
 
-            query = update(URL).values(values).where(URL.url == url)
+            query = update(URL).values(values).where(func.md5(URL.url) == func.md5(url))
 
             session.execute(query)
 
@@ -180,7 +180,7 @@ class BaseSQLURLTable(BaseURLTable):
 
         with self._session() as session:
             for url in urls:
-                query = delete(URL).where(URL.url == url)
+                query = delete(URL).where(func.md5(URL.url) == func.md5(url))
                 session.execute(query)
 
     def add_visits(self, visits):

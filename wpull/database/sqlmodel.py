@@ -2,8 +2,9 @@
 
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql.schema import Column, ForeignKey
+from sqlalchemy.sql.schema import Column, ForeignKey, Index
 from sqlalchemy.sql.sqltypes import Integer, Enum, Boolean, String
+from sqlalchemy.sql.functions import func
 import sqlalchemy.ext.declarative
 
 from wpull.item import Status, URLRecord, LinkType
@@ -18,7 +19,7 @@ class URL(DBBase):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
 
-    url = Column(String, nullable=False, unique=True, index=True)
+    url = Column(String, nullable=False)
 
     status = Column(
         Enum(
@@ -85,6 +86,8 @@ class URL(DBBase):
             self.post_data,
             self.filename,
         )
+
+Index('idx_url_md5', func.md5(URL.url), unique = True)
 
 
 class Visit(DBBase):
