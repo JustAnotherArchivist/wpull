@@ -4,7 +4,9 @@ from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql.schema import Column, ForeignKey, Index
 from sqlalchemy.sql.sqltypes import Integer, Enum, Boolean, String
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql.functions import func
+from sqlalchemy.sql.expression import cast
 import sqlalchemy.ext.declarative
 
 from wpull.item import Status, URLRecord, LinkType
@@ -87,7 +89,7 @@ class URL(DBBase):
             self.filename,
         )
 
-Index('idx_url_md5', func.md5(URL.url), unique = True)
+Index('idx_url_md5', cast(func.md5(URL.url), UUID), unique = True)
 
 
 class Visit(DBBase):

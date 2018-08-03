@@ -9,8 +9,9 @@ from sqlalchemy.engine import create_engine
 from sqlalchemy.orm.session import sessionmaker
 from sqlalchemy.pool import SingletonThreadPool
 from sqlalchemy.sql.expression import insert, update, select, and_, delete, \
-    bindparam
+    bindparam, cast
 from sqlalchemy.dialects.postgresql import insert as insert_pgsql
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql.functions import func
 import sqlalchemy.event
 
@@ -47,7 +48,7 @@ class BaseSQLURLTable(BaseURLTable):
 
     def get_one(self, url):
         with self._session() as session:
-            result = session.query(URL).filter(func.md5(URL.url) == func.md5(url)).first()
+            result = session.query(URL).filter(cast(func.md5(URL.url), UUID) == cast(func.md5(url), UUID)).first()
 
             if not result:
                 raise NotFound()
@@ -78,11 +79,11 @@ class BaseSQLURLTable(BaseURLTable):
             # and they can't get modified currently (referrer will be in_progress by the current item,
             # and top_url will be done already), so this is safe.
             if referrer:
-                referrer_id = session.query(URL).filter(func.md5(URL.url) == func.md5(referrer)).first().id
+                referrer_id = session.query(URL).filter(cast(func.md5(URL.url), UUID) == cast(func.md5(referrer), UUID)).first().id
             else:
                 referrer_id = None
             if top_url:
-                top_url_id = session.query(URL).filter(func.md5(URL.url) == func.md5(top_url)).first().id
+                top_url_id = session.query(URL).filter(cast(func.md5(URL.url), UUID) == cast(func.md5(top_url), UUID)).first().id
             else:
                 top_url_id = None
 
@@ -153,7 +154,7 @@ class BaseSQLURLTable(BaseURLTable):
             if increment_try_count:
                 values[URL.try_count] = URL.try_count + 1
 
-            query = update(URL).values(values).where(func.md5(URL.url) == func.md5(url))
+            query = update(URL).values(values).where(cast(func.md5(URL.url), UUID) == cast(func.md5(url), UUID))
 
             session.execute(query)
 
@@ -164,7 +165,7 @@ class BaseSQLURLTable(BaseURLTable):
             for key, value in kwargs.items():
                 values[getattr(URL, key)] = value
 
-            query = update(URL).values(values).where(func.md5(URL.url) == func.md5(url))
+            query = update(URL).values(values).where(cast(func.md5(URL.url), UUID) == cast(func.md5(url), UUID))
 
             session.execute(query)
 
@@ -180,7 +181,7 @@ class BaseSQLURLTable(BaseURLTable):
 
         with self._session() as session:
             for url in urls:
-                query = delete(URL).where(func.md5(URL.url) == func.md5(url))
+                query = delete(URL).where(cast(func.md5(URL.url), UUID) == cast(func.md5(url), UUID))
                 session.execute(query)
 
     def add_visits(self, visits):
