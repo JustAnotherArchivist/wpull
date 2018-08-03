@@ -297,6 +297,12 @@ class AppArgumentParser(argparse.ArgumentParser):
                 help=_('pause if minimum free memory is exceeded')
             )
 
+        group.add_argument(
+            '--process-name',
+            metavar = 'NAME',
+            help = _('assign a name to this process (default: "hostname-PID")')
+        )
+
     def _add_log_and_input_args(self):
         group = self.add_argument_group(_('logging and input'))
         output_log_group = group.add_mutually_exclusive_group()

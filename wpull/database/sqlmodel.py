@@ -74,6 +74,8 @@ class URL(DBBase):
     post_data = Column(String, doc='Additional percent-encoded data for POST.')
     filename = Column(String, doc='Local filename of the item.')
 
+    process_name = Column(String, doc = 'Name of the process handling this URL')
+
     def to_plain(self):
         return URLRecord(
             self.url,

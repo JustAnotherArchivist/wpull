@@ -706,7 +706,7 @@ class Builder(object):
             self._factory.class_map[
                 'URLTableImplementation'] = GenericSQLURLTable
             url_table_impl = self._factory.new(
-                'URLTableImplementation', self._args.database_uri)
+                'URLTableImplementation', self._args.database_uri, process_name = self._args.process_name)
         else:
             url_table_impl = self._factory.new(
                 'URLTableImplementation', path=self._args.database)

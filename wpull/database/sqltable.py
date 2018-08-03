@@ -4,6 +4,7 @@ import contextlib
 import logging
 import urllib.parse
 import os
+import socket
 
 from sqlalchemy.engine import create_engine
 from sqlalchemy.orm.session import sessionmaker
@@ -24,6 +25,11 @@ _logger = logging.getLogger(__name__)
 
 
 class BaseSQLURLTable(BaseURLTable):
+    def __init__(self, process_name = None):
+        if process_name is None:
+            process_name = '{}-{}'.format(socket.gethostname(), os.getpid())
+        self._process_name = process_name
+
     @abc.abstractproperty
     def _session_maker(self):
         pass
@@ -139,6 +145,7 @@ class BaseSQLURLTable(BaseURLTable):
                 raise NotFound()
 
             url_record.status = Status.in_progress
+            url_record.process_name = self._process_name
 
             return url_record.to_plain()
 
@@ -217,8 +224,8 @@ class SQLiteURLTable(BaseSQLURLTable):
     Args:
         path: A SQLite filename
     '''
-    def __init__(self, path=':memory:'):
-        super().__init__()
+    def __init__(self, path=':memory:', **kwargs):
+        super().__init__(**kwargs)
         # We use a SingletonThreadPool always because we are using WAL
         # and want SQLite to handle the checkpoints. Otherwise NullPool
         # will open and close the connection rapidly, defeating the purpose
@@ -255,8 +262,8 @@ class GenericSQLURLTable(BaseSQLURLTable):
     Args:
         url: A SQLAlchemy database URL.
     '''
-    def __init__(self, url):
-        super().__init__()
+    def __init__(self, url, **kwargs):
+        super().__init__(**kwargs)
         self._engine = create_engine(url)
         DBBase.metadata.create_all(self._engine)
         self._session_maker_instance = sessionmaker(bind=self._engine)
