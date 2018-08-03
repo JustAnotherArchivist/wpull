@@ -17,7 +17,7 @@ from sqlalchemy.sql.functions import func
 import sqlalchemy.event
 
 from wpull.database.base import BaseURLTable, NotFound
-from wpull.database.sqlmodel import URL, Visit, DBBase
+from wpull.database.sqlmodel import Process, URL, Visit, DBBase
 from wpull.item import Status
 
 
@@ -29,6 +29,7 @@ class BaseSQLURLTable(BaseURLTable):
         if process_name is None:
             process_name = '{}-{}'.format(socket.gethostname(), os.getpid())
         self._process_name = process_name
+        self._process = None # Process object
 
     @abc.abstractproperty
     def _session_maker(self):
@@ -125,6 +126,10 @@ class BaseSQLURLTable(BaseURLTable):
 
     def check_out(self, filter_status, level=None):
         with self._session() as session:
+            if self._process is None:
+                self._process = Process(name = self._process_name)
+                session.add(self._process)
+
             if level is None:
                 q = session.query(URL).filter_by(
                     status=filter_status)
@@ -145,10 +150,7 @@ class BaseSQLURLTable(BaseURLTable):
                 raise NotFound()
 
             url_record.status = Status.in_progress
-            if url_record.process_name:
-                url_record.process_name = '{},{}'.format(url_record.process_name, self._process_name)
-            else:
-                url_record.process_name = self._process_name
+            url_record.processes.append(self._process)
 
             return url_record.to_plain()
 

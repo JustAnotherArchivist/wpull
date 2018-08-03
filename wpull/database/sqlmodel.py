@@ -2,7 +2,7 @@
 
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql.schema import Column, ForeignKey, Index
+from sqlalchemy.sql.schema import Table, Column, ForeignKey, Index
 from sqlalchemy.sql.sqltypes import Integer, Enum, Boolean, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql.functions import func
@@ -13,6 +13,13 @@ from wpull.item import Status, URLRecord, LinkType
 
 
 DBBase = sqlalchemy.ext.declarative.declarative_base()
+
+
+urls_processes_table = Table('urls_processes', DBBase.metadata,
+    Column('id', Integer, primary_key = True, autoincrement = True),
+    Column('url_id', Integer, ForeignKey('urls.id')),
+    Column('process_id', Integer, ForeignKey('processes.id'))
+)
 
 
 class URL(DBBase):
@@ -74,7 +81,7 @@ class URL(DBBase):
     post_data = Column(String, doc='Additional percent-encoded data for POST.')
     filename = Column(String, doc='Local filename of the item.')
 
-    process_name = Column(String, doc = 'Name of the process handling this URL')
+    processes = relationship('Process', secondary = urls_processes_table)
 
     def to_plain(self):
         return URLRecord(
@@ -92,6 +99,13 @@ class URL(DBBase):
         )
 
 Index('idx_url_md5', cast(func.md5(URL.url), UUID), unique = True)
+
+
+class Process(DBBase):
+    __tablename__ = 'processes'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String)
 
 
 class Visit(DBBase):
