@@ -119,14 +119,20 @@ class BaseSQLURLTable(BaseURLTable):
     def check_out(self, filter_status, level=None):
         with self._session() as session:
             if level is None:
-                url_record = session.query(URL).filter_by(
-                    status=filter_status).first()
+                q = session.query(URL).filter_by(
+                    status=filter_status)
+                if session.bind.dialect.name == 'postgresql':
+                    q = q.with_for_update(skip_locked = True)
+                url_record = q.first()
             else:
-                url_record = session.query(URL)\
+                q = session.query(URL)\
                     .filter(
                         URL.status == filter_status,
                         URL.level < level,
-                ).first()
+                )
+                if session.bind.dialect.name == 'postgresql':
+                    q = q.with_for_update(skip_locked = True)
+                url_record = q.first()
 
             if not url_record:
                 raise NotFound()
