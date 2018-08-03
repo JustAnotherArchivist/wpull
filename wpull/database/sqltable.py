@@ -145,7 +145,10 @@ class BaseSQLURLTable(BaseURLTable):
                 raise NotFound()
 
             url_record.status = Status.in_progress
-            url_record.process_name = self._process_name
+            if url_record.process_name:
+                url_record.process_name = '{},{}'.format(url_record.process_name, self._process_name)
+            else:
+                url_record.process_name = self._process_name
 
             return url_record.to_plain()
 
