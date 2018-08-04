@@ -189,6 +189,7 @@ class URLItem(object):
 
     def set_value(self, **kwargs):
         '''Set values for the URL in table.'''
+        assert self._url_record.status == Status.in_progress
         self._url_table.update_one(self._url, **kwargs)
 
     def add_child_url(self, url, inline=False, **kwargs):

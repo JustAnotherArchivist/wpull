@@ -1,5 +1,6 @@
 '''SQLAlchemy table implementations.'''
 import abc
+import collections
 import contextlib
 import logging
 import urllib.parse
@@ -14,10 +15,11 @@ from sqlalchemy.sql.expression import insert, update, select, and_, delete, \
 from sqlalchemy.dialects.postgresql import insert as insert_pgsql
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql.functions import func
+from sqlalchemy.orm import joinedload
 import sqlalchemy.event
 
 from wpull.database.base import BaseURLTable, NotFound
-from wpull.database.sqlmodel import Process, URL, Visit, DBBase
+from wpull.database.sqlmodel import Process, URL, Visit, DBBase, urls_processes_table
 from wpull.item import Status
 
 
@@ -29,7 +31,13 @@ class BaseSQLURLTable(BaseURLTable):
         if process_name is None:
             process_name = '{}-{}'.format(socket.gethostname(), os.getpid())
         self._process_name = process_name
-        self._process = None # Process object
+        self._process_id = None # process ID
+
+        self._url_block = collections.deque() # deque of URLRecord objects reserved by this process and not checked out yet
+        self._url_block_status = None
+        self._url_block_url_index = {} # dict of URL.url -> URL.id
+        self._url_block_changes = {} # dict of URL.id -> (dict of column -> new value)
+        self._url_block_remaining_counter = 0
 
     @abc.abstractproperty
     def _session_maker(self):
@@ -85,6 +93,7 @@ class BaseSQLURLTable(BaseURLTable):
             # Get IDs of referrer and top_url; we know that these must already exist in the DB,
             # and they can't get modified currently (referrer will be in_progress by the current item,
             # and top_url will be done already), so this is safe.
+            # TODO: Optimise: referrer has to be from the current URL block, and the top URLs can be cached locally (lru cache or something)
             if referrer:
                 referrer_id = session.query(URL).filter(cast(func.md5(URL.url), UUID) == cast(func.md5(referrer), UUID)).first().id
             else:
@@ -111,6 +120,7 @@ class BaseSQLURLTable(BaseURLTable):
                 # A deadlock as described above then becomes impossible.
                 # Cf. https://dba.stackexchange.com/a/195220
                 new_urls = sorted(new_urls, key = lambda x: x['url'])
+                # TODO: This executes one query per URL, I think.
                 session.execute(query, new_urls)
                 # TODO: Return inserted rows
                 return []
@@ -125,61 +135,92 @@ class BaseSQLURLTable(BaseURLTable):
         return added_urls
 
     def check_out(self, filter_status, level=None):
-        with self._session() as session:
-            if self._process is None:
-                self._process = Process(name = self._process_name)
-                session.add(self._process)
+        # TODO: Add a similar check for the level; however, wpull actually doesn't use the level argument of this method anywhere currently.
+        assert level is None, 'level != None currently not supported'
+        if self._url_block_status is not None and filter_status != self._url_block_status:
+            raise NotFound()
 
-            if level is None:
-                q = session.query(URL).filter_by(
-                    status=filter_status)
+        if len(self._url_block) == 0 and self._url_block_remaining_counter > 0:
+            raise NotFound()
+        if len(self._url_block) == 0:
+            assert len(self._url_block_url_index) == 0
+            assert len(self._url_block_changes) == 0
+
+            # Reserve up to 1000 URLs from the DB
+            with self._session() as session:
+                # Get our process object
+                if self._process_id is None:
+                    process = Process(name = self._process_name)
+                    session.add(process)
+                    session.flush()
+                    self._process_id = process.id
+
+                q = session.query(URL).filter_by(status = filter_status).limit(1000)
                 if session.bind.dialect.name == 'postgresql':
                     q = q.with_for_update(skip_locked = True)
-                url_record = q.first()
-            else:
-                q = session.query(URL)\
-                    .filter(
-                        URL.status == filter_status,
-                        URL.level < level,
-                )
-                if session.bind.dialect.name == 'postgresql':
-                    q = q.with_for_update(skip_locked = True)
-                url_record = q.first()
+                urls = q.all()
 
-            if not url_record:
-                raise NotFound()
+                if not urls:
+                    # No more URLs (with this status) in the DB
+                    raise NotFound()
 
-            url_record.status = Status.in_progress
-            url_record.processes.append(self._process)
+                # Mark the URLs as in_progress
+                session.query(URL).filter(URL.id.in_([url.id for url in urls])).update({URL.status: Status.in_progress}, synchronize_session = False)
+                # TODO: This runs an individual query for each URL  - https://stackoverflow.com/a/8034650 https://github.com/pandas-dev/pandas/issues/8953
+                #   http://docs.sqlalchemy.org/en/latest/core/tutorial.html#executing-multiple-statements
+                #session.execute(insert(urls_processes_table), [{'url_id': url.id, 'process_id': self._process_id} for url in urls])
+                session.execute(insert(urls_processes_table).values([{'url_id': url.id, 'process_id': self._process_id} for url in urls]))
 
-            return url_record.to_plain()
+                # Due to synchronize_session in the UPDATE above, the status variable is not updated in the url object, so we need to override it explicitly.
+                url_records = [url.to_plain(status_override = Status.in_progress) for url in urls]
+                url_index = {url.url: url.id for url in urls}
+
+            # Set block variables
+            self._url_block.extend(url_records)
+            self._url_block_status = filter_status
+            self._url_block_url_index = url_index
+            self._url_block_remaining_counter = len(url_records)
+
+        # Pop a URL from the block and return it
+        return self._url_block.popleft()
 
     def check_in(self, url, new_status, increment_try_count=True, **kwargs):
-        with self._session() as session:
-            values = {
-                URL.status: new_status
-            }
+        url_id = self._url_block_url_index[url]
 
-            for key, value in kwargs.items():
-                values[getattr(URL, key)] = value
+        # Build changes dictionary and store it
+        changes = {getattr(URL, key): value for key, value in dict(status = new_status, **kwargs).items()}
+        if increment_try_count:
+            changes[URL.try_count] = URL.try_count + 1
+        if url_id in self._url_block_changes:
+            self._url_block_changes[url_id].update(changes)
+        else:
+            self._url_block_changes[url_id] = changes
 
-            if increment_try_count:
-                values[URL.try_count] = URL.try_count + 1
+        self._url_block_remaining_counter -= 1
 
-            query = update(URL).values(values).where(cast(func.md5(URL.url), UUID) == cast(func.md5(url), UUID))
+        if self._url_block_remaining_counter == 0:
+            assert len(self._url_block) == 0
 
-            session.execute(query)
+            # All URLs in the block are done; check them back in
+            # TODO: Optimise - https://stackoverflow.com/a/18799497 https://gist.github.com/doobeh/b16e800cdd51d6413c09
+            #   http://docs.sqlalchemy.org/en/latest/core/tutorial.html#inserts-updates-and-deletes
+            #   https://stackoverflow.com/a/45152661
+            with self._session() as session:
+                for id in self._url_block_changes:
+                    query = update(URL).values(self._url_block_changes[id]).where(URL.id == id)
+                    session.execute(query)
+
+            # Empty block variables
+            self._url_block_url_index = {}
+            self._url_block_changes = {}
+            self._url_block_status = None
 
     def update_one(self, url, **kwargs):
-        with self._session() as session:
-            values = {}
-
-            for key, value in kwargs.items():
-                values[getattr(URL, key)] = value
-
-            query = update(URL).values(values).where(cast(func.md5(URL.url), UUID) == cast(func.md5(url), UUID))
-
-            session.execute(query)
+        # Only called when url is currently in_progress, so we can just add to the changes dict instead of writing to the DB immediately
+        url_id = self._url_block_url_index[url]
+        if url_id not in self._url_block_changes:
+            self._url_block_changes[url_id] = {}
+        self._url_block_changes[url_id].update({getattr(URL, key): value for key, value in kwargs.items()})
 
     def release(self):
         with self._session() as session:

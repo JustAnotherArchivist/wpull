@@ -83,10 +83,10 @@ class URL(DBBase):
 
     processes = relationship('Process', secondary = urls_processes_table)
 
-    def to_plain(self):
+    def to_plain(self, status_override = None):
         return URLRecord(
             self.url,
-            self.status,
+            status_override if status_override is not None else self.status,
             self.try_count,
             self.level,
             self.top_url,
