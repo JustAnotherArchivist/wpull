@@ -27,7 +27,7 @@ from wpull.cookie import DeFactoCookiePolicy, BetterMozillaCookieJar
 from wpull.coprocessor.phantomjs import PhantomJSCoprocessor, PhantomJSParams
 from wpull.coprocessor.proxy import ProxyCoprocessor
 from wpull.coprocessor.youtubedl import YoutubeDlCoprocessor
-from wpull.database.sqltable import URLTable as SQLURLTable, GenericSQLURLTable
+from wpull.database.sqltable import URLTable as SQLURLTable, GenericSQLURLTable, PostgreSQLURLTable
 from wpull.database.wrap import URLTableHookWrapper
 from wpull.debug import DebugConsoleHandler
 from wpull.dns import Resolver, PythonResolver
@@ -703,8 +703,10 @@ class Builder(object):
             URLTable: An instance of :class:`.database.base.BaseURLTable`.
         '''
         if self._args.database_uri:
-            self._factory.class_map[
-                'URLTableImplementation'] = GenericSQLURLTable
+            if self._args.database_uri.startswith('postgresql://'):
+                self._factory.class_map['URLTableImplementation'] = PostgreSQLURLTable
+            else:
+                self._factory.class_map['URLTableImplementation'] = GenericSQLURLTable
             url_table_impl = self._factory.new(
                 'URLTableImplementation', self._args.database_uri, process_name = self._args.process_name)
         else:
