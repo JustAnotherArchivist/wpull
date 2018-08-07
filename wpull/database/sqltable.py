@@ -387,6 +387,7 @@ class PostgreSQLURLTable(BaseURLTable):
         self._url_block_status = None
         self._url_block_url_index = {} # dict of urls.url -> (urls.id, urls.top_url_id)
         self._url_block_changes = {} # dict of urls.id -> (dict of column -> new value)
+        self._url_block_checked_in = set() # set of urls.id
         self._url_block_remaining_counter = 0
 
     @contextlib.contextmanager
@@ -552,6 +553,40 @@ class PostgreSQLURLTable(BaseURLTable):
         # Pop a URL from the block and return it
         return self._url_block.popleft()
 
+    def _check_in_block(self):
+        # Flush changes for all checked in URLs to the DB
+        # This does *not* remove the flushed changes from the URL block variables!
+
+        # Build value table
+        # Each row might need different updates, so we need to combine it with the data retrieved on checkout
+
+        # Collect column names
+        columns = set() # TODO: Is there a more efficient way to gather all columns?
+        for url_id in self._url_block_checked_in:
+            for k in self._url_block_changes[url_id].keys():
+                columns.add(k)
+
+        # Fill in missing values and id field
+        for url_id in self._url_block_checked_in:
+            for key in columns:
+                if key not in self._url_block_changes[url_id]:
+                    self._url_block_changes[url_id][key] = getattr(self._url_block_records[url_id], key)
+            self._url_block_changes[url_id]['id'] = url_id
+
+        # Build values list
+        columns.add('id')
+        sorted_cols = sorted(columns)
+        values = [tuple(self._url_block_changes[id][key] for key in sorted_cols) for id in self._url_block_checked_in]
+
+        # UPDATE
+        with self._cursor() as cursor:
+            psycopg2.extras.execute_values(cursor,
+                'UPDATE urls SET ' + ', '.join('{} = v.{}{}'.format(column, column, '::status' if column == 'status' else ('::link_type' if column == 'link_type' else ''))
+                                               for column in sorted_cols if column != 'id') + ' '
+                'FROM (VALUES %s) AS v (' + ', '.join(column for column in sorted_cols) + ') '
+                'WHERE urls.id = v.id',
+                values)
+
     def check_in(self, url, new_status, increment_try_count=True, **kwargs):
         url_id, _ = self._url_block_url_index[url]
 
@@ -571,48 +606,20 @@ class PostgreSQLURLTable(BaseURLTable):
             self._url_block_changes[url_id].update(changes)
         else:
             self._url_block_changes[url_id] = changes
+        self._url_block_checked_in.add(url_id)
 
         self._url_block_remaining_counter -= 1
 
         if self._url_block_remaining_counter == 0:
             assert len(self._url_block) == 0
-
             # All URLs in the block are done; check them back in
-
-            # Build value table
-            # Each row might need different updates, so we need to combine it with the data retrieved on checkout
-
-            # Collect column names
-            columns = set() # TODO: Is there a more efficient way to gather all columns?
-            for d in self._url_block_changes.values():
-                for k in d.keys():
-                    columns.add(k)
-
-            # Fill in missing values and id field
-            for url_id in self._url_block_changes:
-                for key in columns:
-                    if key not in self._url_block_changes[url_id]:
-                        self._url_block_changes[url_id][key] = self._url_block_records[url_id][key]
-                self._url_block_changes[url_id]['id'] = url_id
-
-            # Build values list
-            columns.add('id')
-            sorted_cols = sorted(columns)
-            values = [tuple(self._url_block_changes[id][key] for key in sorted_cols) for id in self._url_block_changes]
-
-            # UPDATE
-            with self._cursor() as cursor:
-                psycopg2.extras.execute_values(cursor,
-                    'UPDATE urls SET ' + ', '.join('{} = v.{}{}'.format(column, column, '::status' if column == 'status' else ('::link_type' if column == 'link_type' else ''))
-                                                   for column in sorted_cols if column != 'id') + ' '
-                    'FROM (VALUES %s) AS v (' + ', '.join(column for column in sorted_cols) + ') '
-                    'WHERE urls.id = v.id',
-                    values)
+            self._check_in_block()
 
             # Empty block variables
             self._url_block_records = {}
             self._url_block_url_index = {}
             self._url_block_changes = {}
+            self._url_block_checked_in = set()
             self._url_block_status = None
 
     def update_one(self, url, **kwargs):
@@ -646,6 +653,8 @@ class PostgreSQLURLTable(BaseURLTable):
 
     def close(self):
         #TODO Unmark remaining items?
+        # Flush remaining checked in items
+        self._check_in_block()
         self._connection.close()
 
 
