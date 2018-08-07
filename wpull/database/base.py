@@ -46,6 +46,10 @@ class BaseURLTable(object, metaclass=abc.ABCMeta):
         '''Return all URLRecord.'''
 
     @abc.abstractmethod
+    def has_in_progress_items(self):
+        '''Return whether there are any in_progress items in the table.'''
+
+    @abc.abstractmethod
     def add_many(self, urls, **kwargs):
         '''Add the URLs to the table.
 

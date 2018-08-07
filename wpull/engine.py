@@ -22,6 +22,10 @@ _logger = logging.getLogger(__name__)
 _ = gettext.gettext
 
 
+# Special item that signals to the engine that there are still in_progress items, i.e. that it shouldn't stop yet.
+wait_in_progress_item = object()
+
+
 class BaseEngine(object):
     '''Base engine producer-consumer.'''
     POISON_PILL = object()
@@ -122,6 +126,9 @@ class BaseEngine(object):
                     __('Producer waiting for {0} workers to finish up.',
                         len(self._worker_tasks)))
                 yield From(self._token_queue.join())
+            elif item is wait_in_progress_item:
+                _logger.debug('Producer sleeping for a minute')
+                yield From(trollius.sleep(60))
             else:
                 yield From(self._item_get_semaphore.acquire())
                 self._token_queue.put_nowait(None)
@@ -311,6 +318,10 @@ class Engine(BaseEngine, HookableMixin):
                 url_record = self._url_table.check_out(Status.error)
             except NotFound:
                 url_record = None
+
+        if not url_record:
+            if self._url_table.has_in_progress_items():
+                url_record = wait_in_progress_item
 
         _logger.debug(__('Return record {0}.', url_record))
 

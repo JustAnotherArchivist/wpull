@@ -35,6 +35,9 @@ class URLTableHookWrapper(BaseURLTable, HookableMixin):
     def get_all(self):
         return self.url_table.get_all()
 
+    def has_in_progress_items(self):
+        return self.url_table.has_in_progress_items()
+
     def add_many(self, urls, **kwargs):
         added_urls = tuple(self.url_table.add_many(urls, **kwargs))
 

@@ -79,6 +79,10 @@ class BaseSQLURLTable(BaseURLTable):
             for item in session.query(URL):
                 yield item.to_plain()
 
+    def has_in_progress_items(self):
+        with self._session() as session:
+            return session.query(URL).filter(status == Status.in_progress).count() > 0
+
     def add_many(self, new_urls, **kwargs):
         assert not isinstance(new_urls, (str, bytes)), \
             'Expected a list-like. Got {}'.format(new_urls)
@@ -456,6 +460,11 @@ class PostgreSQLURLTable(BaseURLTable):
         with self._select_urls() as cursor:
             for result in cursor:
                 yield self._result_to_url_record(result)
+
+    def has_in_progress_items(self):
+        with self._cursor() as cursor:
+            cursor.execute('SELECT COUNT(id) FROM urls WHERE status = %s', (Status.in_progress,))
+            return cursor.fetchone()[0] > 0
 
     def add_many(self, new_urls, **kwargs):
         # Restriction: referrer and top_url can only be specified together, and top_url must be the top-level URL of the referrer
