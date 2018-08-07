@@ -596,6 +596,9 @@ class PostgreSQLURLTable(BaseURLTable):
         self._insert_children()
 
     def _insert_children(self):
+        if len(self._url_block_checked_in) == 0 or len(self._url_block_children) == 0:
+            return
+
         column_set = self._url_block_children_column_set
         sorted_cols = sorted(column_set)
 
