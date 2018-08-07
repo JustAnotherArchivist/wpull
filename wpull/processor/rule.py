@@ -404,7 +404,7 @@ class ProcessingRule(HookableMixin):
             )
 
             url_item.add_child_urls(
-                [url_info.url for url_info in extra_url_infos]
+                [url_info.url for url_info in extra_url_infos], link_type = None
             )
 
     def scrape_document(self, request, response, url_item):

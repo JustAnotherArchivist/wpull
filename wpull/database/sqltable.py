@@ -388,6 +388,8 @@ class PostgreSQLURLTable(BaseURLTable):
         self._url_block_url_index = {} # dict of urls.url -> (urls.id, urls.top_url_id)
         self._url_block_changes = {} # dict of urls.id -> (dict of column -> new value)
         self._url_block_checked_in = set() # set of urls.id
+        self._url_block_children = {} # dict of urls.id -> tuple (new_urls: list of dicts, common_values: dict)
+        self._url_block_children_column_set = set() # set of column names (str)
         self._url_block_remaining_counter = 0
 
     @contextlib.contextmanager
@@ -473,48 +475,51 @@ class PostgreSQLURLTable(BaseURLTable):
         assert all('url' in item and 'referrer' not in item and 'top_url' not in item for item in new_urls)
 
         # Ensure that all new_urls entries share the same columns (together with the kwargs), otherwise a bulk insert isn't possible
-        column_set = set(kwargs.keys()) | set(new_urls[0].keys())
-        column_set.add('status')
+        if len(self._url_block_children):
+            column_set = self._url_block_children_column_set
+            # This requires that all calls to add_many within a block either have referrer/top_url or don't...
+            assert bool(referrer) == ('referrer_id' in column_set)
+            assert (set(kwargs.keys()) | set(new_urls[0].keys())) | set(('status',)) | (set(('referrer_id', 'top_url_id')) if referrer else set()) == column_set
+        else:
+            column_set = set(kwargs.keys()) | set(new_urls[0].keys())
+            column_set.add('status')
+            self._url_block_children_column_set = column_set
+            # ... and that the columns are valid
+            assert all(key in ('url', 'status', 'try_count', 'level', 'status_code', 'inline', 'link_type', 'post_data', 'filename') for key in column_set)
+            # (implicitly also checks that referrer_id and top_url_id aren't specified)
         assert all(set(item.keys()).issubset(column_set) for item in new_urls)
-        # ... and that the columns are valid
-        assert all(key in ('url', 'status', 'try_count', 'level', 'status_code', 'inline', 'link_type', 'post_data', 'filename') for key in column_set)
-        # (implicitly also checks that referrer_id and top_url_id aren't specified)
         if referrer:
             column_set.add('referrer_id')
             column_set.add('top_url_id')
-        sorted_cols = sorted(column_set)
 
         if referrer:
             referrer_id, top_url_id = self._url_block_url_index[referrer]
             assert top_url_id is None or self._url_block_records[referrer_id].top_url == top_url
             if top_url_id is None: # referrer itself is a top-level URL
                 top_url_id = referrer_id
-
-        # Sort the urls
-        # In PostgreSQL with concurrent transactions, we need to insert the URLs in the a consistent order.
-        # If we don't, we will end in a deadlock eventually, where transaction 1 writes URL 1, then
-        # transaction 2 writes URL 2 and attempts to write URL 1, then transaction 1 attempts to write URL 2.
-        # In that scenario, both transactions block each other.
-        # The easiest way to avoid this is to ensure that URLs are always inserted in a specific order.
-        # A deadlock as described above then becomes impossible.
-        # Cf. https://dba.stackexchange.com/a/195220
-        new_urls = sorted(new_urls, key = lambda x: x['url'])
+        else:
+            referrer_id = None # Needed below for _url_block_children
 
         # Prepare the insert values
-        global_values = {'status': Status.todo}
+        common_values = {'status': Status.todo}
         if referrer:
-            global_values['referrer_id'] = referrer_id
-            global_values['top_url_id'] = top_url_id
-        global_values.update(**kwargs)
-        values = [tuple(item[key] if key in item else global_values[key] for key in sorted_cols) for item in new_urls]
+            common_values['referrer_id'] = referrer_id
+            common_values['top_url_id'] = top_url_id
+        common_values.update(**kwargs)
 
-        with self._cursor() as cursor:
-            # Insert the URLs
-            # Note that it would be cleaner to use psycopg2.sql (https://stackoverflow.com/a/27291545), but we already made sure that all column names are okay, so this is not a security issue.
-            query = 'INSERT INTO urls ({}) VALUES %s ON CONFLICT DO NOTHING'.format(', '.join(sorted_cols))
-            psycopg2.extras.execute_values(cursor, query, values)
+        self._url_block_children[referrer_id] = (new_urls, common_values)
+        if referrer_id is None:
+            # Initial URLs, need to be flushed immediately. There shouldn't be anything in the URL block at that time
+            assert len(self._url_block) == 0
+            assert len(self._url_block_changes) == 0
+            assert len(self._url_block_checked_in) == 0
+            self._url_block_checked_in.add(None)
+            self._insert_children()
+            self._url_block_checked_in = set()
+            self._url_block_children = {}
+            self._url_block_children_column_set = set()
 
-        # TODO: Return inserted rows
+        # It is impossible to return the inserted URLs because we won't insert them until the end of the block...
         return []
 
     def check_out(self, filter_status, level=None):
@@ -587,6 +592,35 @@ class PostgreSQLURLTable(BaseURLTable):
                 'WHERE urls.id = v.id',
                 values)
 
+        self._insert_children()
+
+    def _insert_children(self):
+        column_set = self._url_block_children_column_set
+        sorted_cols = sorted(column_set)
+
+        values = []
+        for url_id in self._url_block_checked_in:
+            if url_id in self._url_block_children:
+                new_urls, global_values = self._url_block_children[url_id]
+                values.extend(tuple(item[key] if key in item else global_values[key] for key in sorted_cols) for item in new_urls)
+
+        # Sort the urls
+        # In PostgreSQL with concurrent transactions, we need to insert the URLs in the a consistent order.
+        # If we don't, we will end in a deadlock eventually, where transaction 1 writes URL 1, then
+        # transaction 2 writes URL 2 and attempts to write URL 1, then transaction 1 attempts to write URL 2.
+        # In that scenario, both transactions block each other.
+        # The easiest way to avoid this is to ensure that URLs are always inserted in a specific order.
+        # A deadlock as described above then becomes impossible.
+        # Cf. https://dba.stackexchange.com/a/195220
+        url_index = sorted_cols.index('url')
+        values.sort(key = lambda x: x[url_index])
+
+        with self._cursor() as cursor:
+            # Insert the URLs
+            # Note that it would be cleaner to use psycopg2.sql (https://stackoverflow.com/a/27291545), but we already made sure that all column names are okay, so this is not a security issue.
+            query = 'INSERT INTO urls ({}) VALUES %s ON CONFLICT DO NOTHING'.format(', '.join(sorted_cols))
+            psycopg2.extras.execute_values(cursor, query, values)
+
     def check_in(self, url, new_status, increment_try_count=True, **kwargs):
         url_id, _ = self._url_block_url_index[url]
 
@@ -620,6 +654,8 @@ class PostgreSQLURLTable(BaseURLTable):
             self._url_block_url_index = {}
             self._url_block_changes = {}
             self._url_block_checked_in = set()
+            self._url_block_children = {}
+            self._url_block_children_column_set = set()
             self._url_block_status = None
 
     def update_one(self, url, **kwargs):
