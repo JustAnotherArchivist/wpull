@@ -385,7 +385,7 @@ class PostgreSQLURLTable(BaseURLTable):
         self._url_block = collections.deque() # deque of URLRecord objects reserved by this process and not checked out yet
         self._url_block_records = {} # dict of urls.id -> URLRecord
         self._url_block_status = None
-        self._url_block_url_index = {} # dict of urls.url -> urls.id
+        self._url_block_url_index = {} # dict of urls.url -> (urls.id, urls.top_url_id)
         self._url_block_changes = {} # dict of urls.id -> (dict of column -> new value)
         self._url_block_remaining_counter = 0
 
@@ -406,17 +406,19 @@ class PostgreSQLURLTable(BaseURLTable):
 
     def _result_to_url_record(self, result, status_override = None):
         return URLRecord(
+            # id
             result[1], # url
-            status_override if status_override is not None else result[2],
+            status_override if status_override is not None else result[2], # status
             result[3], # try_count
             result[4], # level
-            result[5], # top_url
-            result[6], # status_code
-            result[7], # referrer_url
-            result[8], # inline
-            result[9], # link_type
-            result[10], # post_data
-            result[11], # filename
+            # top_url_id
+            result[6], # top_url
+            result[7], # status_code
+            result[8], # referrer_url
+            result[9], # inline
+            result[10], # link_type
+            result[11], # post_data
+            result[12], # filename
         )
 
     @contextlib.contextmanager
@@ -428,7 +430,7 @@ class PostgreSQLURLTable(BaseURLTable):
 
         with self._cursor(cursor) as cursor:
             cursor.execute('''SELECT urls.id, urls.url, urls.status, urls.try_count, urls.level,
-                urls_top.url AS top_url, urls.status_code, urls_referrer.url AS referrer_url,
+                urls.top_url_id, urls_top.url AS top_url, urls.status_code, urls_referrer.url AS referrer_url,
                 urls.inline, urls.link_type, urls.post_data, urls.filename
                 FROM urls
                 LEFT JOIN urls AS urls_top ON urls.top_url_id = urls_top.id
@@ -452,11 +454,14 @@ class PostgreSQLURLTable(BaseURLTable):
                 yield self._result_to_url_record(result)
 
     def add_many(self, new_urls, **kwargs):
+        # Restriction: referrer and top_url can only be specified together, and top_url must be the top-level URL of the referrer
+
         #TODO Collect, insert all together at the end of the block?
         assert not isinstance(new_urls, (str, bytes)), \
             'Expected a list-like. Got {}'.format(new_urls)
         referrer = kwargs.pop('referrer', None)
         top_url = kwargs.pop('top_url', None)
+        assert (referrer is not None) == (top_url is not None) # Either both or neither
 
         new_urls = tuple(new_urls)
 
@@ -475,9 +480,14 @@ class PostgreSQLURLTable(BaseURLTable):
         # (implicitly also checks that referrer_id and top_url_id aren't specified)
         if referrer:
             column_set.add('referrer_id')
-        if top_url:
             column_set.add('top_url_id')
         sorted_cols = sorted(column_set)
+
+        if referrer:
+            referrer_id, top_url_id = self._url_block_url_index[referrer]
+            assert top_url_id is None or self._url_block_records[referrer_id].top_url == top_url
+            if top_url_id is None: # referrer itself is a top-level URL
+                top_url_id = referrer_id
 
         # Sort the urls
         # In PostgreSQL with concurrent transactions, we need to insert the URLs in the a consistent order.
@@ -489,27 +499,15 @@ class PostgreSQLURLTable(BaseURLTable):
         # Cf. https://dba.stackexchange.com/a/195220
         new_urls = sorted(new_urls, key = lambda x: x['url'])
 
+        # Prepare the insert values
+        global_values = {'status': Status.todo}
+        if referrer:
+            global_values['referrer_id'] = referrer_id
+            global_values['top_url_id'] = top_url_id
+        global_values.update(**kwargs)
+        values = [tuple(item[key] if key in item else global_values[key] for key in sorted_cols) for item in new_urls]
+
         with self._cursor() as cursor:
-            # Get IDs of referrer and top_url; we know that these must already exist in the DB,
-            # and they can't get modified currently (referrer will be in_progress by the current item,
-            # and top_url will be done already), so this is safe.
-            # TODO: Optimise: referrer has to be from the current URL block, and the top URL ID can be retrieved on checkout
-            if referrer:
-                cursor.execute('SELECT id FROM urls WHERE (md5(url)::uuid) = (md5(%s)::uuid) LIMIT 1', (referrer,))
-                referrer_id = cursor.fetchone()[0]
-            else:
-                referrer_id = None
-            if top_url:
-                cursor.execute('SELECT id FROM urls WHERE (md5(url)::uuid) = (md5(%s)::uuid) LIMIT 1', (top_url,))
-                top_url_id = cursor.fetchone()[0]
-            else:
-                top_url_id = None
-
-            # Prepare the insert values
-            global_values = {'status': Status.todo, 'referrer_id': referrer_id, 'top_url_id': top_url_id}
-            global_values.update(**kwargs)
-            values = [tuple(item[key] if key in item else global_values[key] for key in sorted_cols) for item in new_urls]
-
             # Insert the URLs
             # Note that it would be cleaner to use psycopg2.sql (https://stackoverflow.com/a/27291545), but we already made sure that all column names are okay, so this is not a security issue.
             query = 'INSERT INTO urls ({}) VALUES %s ON CONFLICT DO NOTHING'.format(', '.join(sorted_cols))
@@ -533,29 +531,29 @@ class PostgreSQLURLTable(BaseURLTable):
             # Reserve up to 1000 URLs from the DB
             with self._cursor() as cursor:
                 with self._select_urls('WHERE urls.status = %s LIMIT 1000 FOR UPDATE OF urls SKIP LOCKED', (filter_status,), cursor = cursor) as cursor:
-                    urls = cursor.fetchall()
+                    results = cursor.fetchall()
 
-                if not urls:
+                if not results:
                     # No more URLs (with this status) in the DB
                     raise NotFound()
 
                 # Mark the URLs as in_progress
-                cursor.execute('UPDATE urls SET status = %s WHERE id IN %s', (Status.in_progress, tuple(url[0] for url in urls)))
-                psycopg2.extras.execute_values(cursor, 'INSERT INTO urls_processes (url_id, process_id) VALUES %s', [(url[0], self._process_id) for url in urls])
+                cursor.execute('UPDATE urls SET status = %s WHERE id IN %s', (Status.in_progress, tuple(result[0] for result in results)))
+                psycopg2.extras.execute_values(cursor, 'INSERT INTO urls_processes (url_id, process_id) VALUES %s', [(result[0], self._process_id) for result in results])
 
             # Set block variables
             # The status in urls is still the old one, so that needs to be overridden
-            self._url_block_records = {result[0]: self._result_to_url_record(result, status_override = Status.in_progress) for result in urls}
-            self._url_block.extend(self._result_to_url_record(result, status_override = Status.in_progress) for result in urls)
+            self._url_block_records = {result[0]: self._result_to_url_record(result, status_override = Status.in_progress) for result in results}
+            self._url_block.extend(self._result_to_url_record(result, status_override = Status.in_progress) for result in results)
             self._url_block_status = filter_status
-            self._url_block_url_index = {url[1]: url[0] for url in urls}
-            self._url_block_remaining_counter = len(urls)
+            self._url_block_url_index = {result[1]: (result[0], result[5]) for result in results}
+            self._url_block_remaining_counter = len(results)
 
         # Pop a URL from the block and return it
         return self._url_block.popleft()
 
     def check_in(self, url, new_status, increment_try_count=True, **kwargs):
-        url_id = self._url_block_url_index[url]
+        url_id, _ = self._url_block_url_index[url]
 
         # TODO: level and inline should probably not be in here, also status not
         assert all(key in ('status', 'level', 'status_code', 'inline', 'link_type', 'post_data', 'filename') for key in kwargs.keys())
@@ -619,7 +617,7 @@ class PostgreSQLURLTable(BaseURLTable):
 
     def update_one(self, url, **kwargs):
         # Only called when url is currently in_progress, so we can just add to the changes dict instead of writing to the DB immediately
-        url_id = self._url_block_url_index[url]
+        url_id = self._url_block_url_index[url][0]
         if url_id not in self._url_block_changes:
             self._url_block_changes[url_id] = {}
         self._url_block_changes[url_id].update(**kwargs)
