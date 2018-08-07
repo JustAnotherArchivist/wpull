@@ -127,7 +127,7 @@ class BaseEngine(object):
                         len(self._worker_tasks)))
                 yield From(self._token_queue.join())
             elif item is wait_in_progress_item:
-                _logger.debug('Producer sleeping for a minute')
+                _logger.info('Producer sleeping for a minute')
                 yield From(trollius.sleep(60))
             else:
                 yield From(self._item_get_semaphore.acquire())
