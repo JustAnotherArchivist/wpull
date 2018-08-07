@@ -3,6 +3,7 @@ import abc
 import collections
 import contextlib
 import logging
+import operator
 import urllib.parse
 import os
 import socket
@@ -604,7 +605,7 @@ class PostgreSQLURLTable(BaseURLTable):
                 new_urls, global_values = self._url_block_children[url_id]
                 values.extend(tuple(item[key] if key in item else global_values[key] for key in sorted_cols) for item in new_urls)
 
-        # Sort the urls
+        # Sort the urls and pre-filter duplicates
         # In PostgreSQL with concurrent transactions, we need to insert the URLs in the a consistent order.
         # If we don't, we will end in a deadlock eventually, where transaction 1 writes URL 1, then
         # transaction 2 writes URL 2 and attempts to write URL 1, then transaction 1 attempts to write URL 2.
@@ -612,8 +613,26 @@ class PostgreSQLURLTable(BaseURLTable):
         # The easiest way to avoid this is to ensure that URLs are always inserted in a specific order.
         # A deadlock as described above then becomes impossible.
         # Cf. https://dba.stackexchange.com/a/195220
+        #
+        # The pre-filtering of duplicates is merely an optimisation step to reduce traffic to the DB, which is beneficial in high-latency cases.
+        # The entry with the lowest referrer_id is kept; if there is no referrer_id field, an arbitrary entry is kept.
         url_index = sorted_cols.index('url')
-        values.sort(key = lambda x: x[url_index])
+        if 'referrer_id' in sorted_cols:
+            referrer_id_index = sorted_cols.index('referrer_id')
+            f = operator.itemgetter(url_index, referrer_id_index)
+        else:
+            f = operator.itemgetter(url_index)
+        values.sort(key = f)
+
+        previous_url = None
+        unfiltered_values = values
+        values = []
+        for row in unfiltered_values:
+            if row[url_index] == previous_url:
+                continue
+            values.append(row)
+            previous_url = row[url_index]
+        del unfiltered_values
 
         with self._cursor() as cursor:
             # Insert the URLs
