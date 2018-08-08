@@ -593,10 +593,17 @@ class PostgreSQLURLTable(BaseURLTable):
         sorted_cols = sorted(columns)
         values = [tuple(self._url_block_changes[id][key] for key in sorted_cols) for id in self._url_block_checked_in]
 
+        column_types = {
+            'status': 'status',
+            'link_type': 'link_type',
+            'status_code': 'int',
+            'inline': 'int',
+        }
+
         # UPDATE
         with self._cursor() as cursor:
             psycopg2.extras.execute_values(cursor,
-                'UPDATE urls SET ' + ', '.join('{} = v.{}{}'.format(column, column, '::status' if column == 'status' else ('::link_type' if column == 'link_type' else ''))
+                'UPDATE urls SET ' + ', '.join('{} = v.{}{}'.format(column, column, '::{}'.format(column_types[column]) if column in column_types else '')
                                                for column in sorted_cols if column != 'id') + ' '
                 'FROM (VALUES %s) AS v (' + ', '.join(column for column in sorted_cols) + ') '
                 'WHERE urls.id = v.id',
