@@ -169,8 +169,8 @@ class Application(HookableMixin):
         yield From(self._close_servers())
         self._print_stats()
         self._convert_documents()
-        self.stop_observer.notify()
         self._close()
+        self.stop_observer.notify()
 
         raise Return(self._exit_code)
 
