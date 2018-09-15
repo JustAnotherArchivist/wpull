@@ -557,6 +557,8 @@ class PostgreSQLURLTable(BaseURLTable):
             assert len(self._url_block_url_index) == 0
             assert len(self._url_block_changes) == 0
 
+            _logger.debug('Checking out URLs')
+
             # Reserve up to 1000 URLs from the DB
             with self._cursor() as cursor:
                 with self._select_urls('WHERE urls.status = %s LIMIT 1000 FOR UPDATE OF urls SKIP LOCKED', (filter_status,), cursor = cursor) as cursor:
@@ -592,6 +594,8 @@ class PostgreSQLURLTable(BaseURLTable):
                             self._mutable_reject_regexes_filter.remove(pattern)
                     self._ignore_pattern_generation = updates[-1][0]
 
+            _logger.debug('Checked out {} URLs'.format(len(self._url_block)))
+
         # Pop a URL from the block and return it
         return self._url_block.popleft()
 
@@ -601,6 +605,8 @@ class PostgreSQLURLTable(BaseURLTable):
 
         # Build value table
         # Each row might need different updates, so we need to combine it with the data retrieved on checkout
+
+        _logger.debug('Checking in URLs')
 
         # Collect column names
         columns = set() # TODO: Is there a more efficient way to gather all columns?
@@ -637,6 +643,8 @@ class PostgreSQLURLTable(BaseURLTable):
                 values)
 
         self._insert_children()
+
+        _logger.debug('Checked in')
 
     def _insert_children(self):
         if len(self._url_block_checked_in) == 0 or len(self._url_block_children) == 0:
@@ -758,10 +766,12 @@ class PostgreSQLURLTable(BaseURLTable):
     def close(self):
         # Unmark remaining items
         # This implicitly checks in the block at the end of the loop if everything goes right
+        _logger.debug('Returning {} URLs to the pool'.format(len(self._url_block)))
         for record in self._url_block:
             self.check_in(record.url, self._url_block_status, increment_try_count = False)
         # But if for some reason it didn't get checked in, force it...
         if self._url_block_remaining_counter > 0:
+            _logger.debug('Forcing checkin')
             self._check_in_block()
         self._connection.close()
 
