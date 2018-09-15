@@ -756,9 +756,13 @@ class PostgreSQLURLTable(BaseURLTable):
         self._mutable_reject_regexes_filter = filter
 
     def close(self):
-        #TODO Unmark remaining items?
-        # Flush remaining checked in items
-        self._check_in_block()
+        # Unmark remaining items
+        # This implicitly checks in the block at the end of the loop if everything goes right
+        for record in self._url_block:
+            self.check_in(record.url, self._url_block_status, increment_try_count = False)
+        # But if for some reason it didn't get checked in, force it...
+        if self._url_block_remaining_counter > 0:
+            self._check_in_block()
         self._connection.close()
 
 
