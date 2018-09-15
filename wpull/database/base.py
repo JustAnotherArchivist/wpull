@@ -10,6 +10,10 @@ class NotFound(DatabaseError):
     '''Item not found in the table.'''
 
 
+class BlockExhausted(NotFound):
+    '''The current URL block has been exhausted but hasn't finished processing yet.'''
+
+
 class BaseURLTable(object, metaclass=abc.ABCMeta):
     '''URL table.'''
 

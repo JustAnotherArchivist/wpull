@@ -11,7 +11,7 @@ from trollius import From, Return
 import trollius
 
 from wpull.backport.logging import BraceMessage as __
-from wpull.database.base import NotFound
+from wpull.database.base import NotFound, BlockExhausted
 from wpull.hook import HookableMixin, HookDisconnected
 from wpull.item import Status, URLItem
 from wpull.url import parse_url_or_log
@@ -22,8 +22,10 @@ _logger = logging.getLogger(__name__)
 _ = gettext.gettext
 
 
-# Special item that signals to the engine that there are still in_progress items, i.e. that it shouldn't stop yet.
+# Special item that signals to the engine that there are still in_progress items on other processes, i.e. that it shouldn't stop yet.
 wait_in_progress_item = object()
+# Special item that signals to the engine that the current URL block is exhausted and it should retry once all workers are done.
+wait_workers_item = object
 
 
 class BaseEngine(object):
@@ -121,7 +123,7 @@ class BaseEngine(object):
             if item is None and self._token_queue._unfinished_tasks == 0:
                 _logger.debug('Producer stopping.')
                 self._stop()
-            elif item is None:
+            elif item is None or item is wait_workers_item:
                 _logger.debug(
                     __('Producer waiting for {0} workers to finish up.',
                         len(self._worker_tasks)))
@@ -309,6 +311,8 @@ class Engine(BaseEngine, HookableMixin):
 
         try:
             url_record = self._url_table.check_out(Status.todo)
+        except BlockExhausted:
+            url_record = wait_workers_item
         except NotFound:
             url_record = None
 
@@ -316,6 +320,8 @@ class Engine(BaseEngine, HookableMixin):
             try:
                 _logger.debug('Get next URL error.')
                 url_record = self._url_table.check_out(Status.error)
+            except BlockExhausted:
+                url_record = wait_workers_item
             except NotFound:
                 url_record = None
 

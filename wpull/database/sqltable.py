@@ -22,7 +22,7 @@ import sqlalchemy.event
 import psycopg2
 import psycopg2.extras
 
-from wpull.database.base import BaseURLTable, NotFound
+from wpull.database.base import BaseURLTable, NotFound, BlockExhausted
 from wpull.database.sqlmodel import Process, URL, Visit, DBBase, urls_processes_table
 from wpull.item import Status, URLRecord, LinkType
 
@@ -552,7 +552,7 @@ class PostgreSQLURLTable(BaseURLTable):
             raise NotFound()
 
         if len(self._url_block) == 0 and self._url_block_remaining_counter > 0:
-            raise NotFound()
+            raise BlockExhausted()
         if len(self._url_block) == 0:
             assert len(self._url_block_url_index) == 0
             assert len(self._url_block_changes) == 0
