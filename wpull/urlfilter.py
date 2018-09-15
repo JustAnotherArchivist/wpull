@@ -2,9 +2,12 @@
 '''URL filters.'''
 import abc
 import fnmatch
+import logging
 import re
 
 from wpull.url import URLInfo, schemes_similar, is_subdir
+
+_logger = logging.getLogger(__name__)
 
 
 class BaseURLFilter(object, metaclass=abc.ABCMeta):
@@ -318,3 +321,30 @@ class BackwardFilenameFilter(BaseURLFilter):
             match = re.search(fnmatch.translate(suffix), test_filename)
             if match:
                 return True
+
+
+class MutableRejectRegexesFilter(BaseURLFilter):
+    '''Filter URLs that match a mutable set of regular expressions.'''
+    def __init__(self, patterns = []):
+        self._patterns = patterns
+        self._compiled = [re.compile(pattern) for pattern in patterns]
+
+    def add(self, pattern):
+        self._patterns.append(pattern)
+        self._compiled.append(re.compile(pattern))
+
+    def remove(self, pattern):
+        try:
+            idx = self._patterns.index(pattern)
+        except ValueError:
+            return
+        del self._patterns[idx]
+        del self._compiled[idx]
+
+    def test(self, url_info, url_table_record):
+        for pattern in self._compiled:
+            if pattern.search(url_info.url):
+                _logger.info('Ignoring ‘{}’ using pattern {}'.format(url_info.url, pattern.pattern))
+                return False
+
+        return True

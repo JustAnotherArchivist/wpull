@@ -74,7 +74,7 @@ from wpull.urlfilter import (DemuxURLFilter, HTTPSOnlyFilter, SchemeFilter,
                              RecursiveFilter, LevelFilter,
                              SpanHostsFilter, RegexFilter, DirectoryFilter,
                              BackwardFilenameFilter, ParentFilter,
-                             FollowFTPFilter)
+                             FollowFTPFilter, MutableRejectRegexesFilter)
 from wpull.urlrewrite import URLRewriter
 from wpull.util import ASCIIStreamWriter, GzipPickleStream
 from wpull.waiter import LinearWaiter
@@ -130,6 +130,7 @@ class Builder(object):
             'HTMLParser': NotImplemented,
             'HTMLScraper': HTMLScraper,
             'JavaScriptScraper': JavaScriptScraper,
+            'MutableRejectRegexesFilter': MutableRejectRegexesFilter,
             'OutputDocumentRecorder': OutputDocumentRecorder,
             'PathNamer': PathNamer,
             'PhantomJSDriver': PhantomJSDriver,
@@ -228,6 +229,10 @@ class Builder(object):
 
         url_table = self._build_url_table()
         processor = self._build_processor()
+
+        url_table_impl = self._factory['URLTableImplementation']
+        if isinstance(url_table_impl, PostgreSQLURLTable):
+            url_table_impl.set_mutable_reject_regexes_filter(self._factory['MutableRejectRegexesFilter'])
 
         self._factory.new(
             'Engine',
@@ -632,6 +637,8 @@ class Builder(object):
 
         if args.accept or args.reject:
             filters.append(BackwardFilenameFilter(args.accept, args.reject))
+
+        filters.append(self._factory.new('MutableRejectRegexesFilter'))
 
         return filters
 

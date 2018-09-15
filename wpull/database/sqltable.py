@@ -377,6 +377,15 @@ class PostgreSQLURLTable(BaseURLTable):
                       PRIMARY KEY (url)
                     )''')
                 # TODO: The visits table needs some indices.
+                cursor.execute('CREATE TYPE ignore_op AS ENUM %s', (('add', 'remove'),))
+                cursor.execute('''CREATE TABLE ignore_patterns (
+                      id SERIAL NOT NULL,
+                      generation INTEGER,
+                      op ignore_op,
+                      pattern VARCHAR,
+                      PRIMARY KEY (id)
+                    )''')
+                cursor.execute('CREATE INDEX ix_ignore_patterns_generation ON ignore_patterns (generation)')
 
         # Insert process
         if process_name is None:
@@ -396,6 +405,10 @@ class PostgreSQLURLTable(BaseURLTable):
         self._url_block_children = {} # dict of urls.id -> tuple (new_urls: list of dicts, common_values: dict)
         self._url_block_children_column_set = set() # set of column names (str)
         self._url_block_remaining_counter = 0
+
+        # Ignore patterns
+        self._mutable_reject_regexes_filter = None
+        self._ignore_pattern_generation = -1
 
     @contextlib.contextmanager
     def _cursor(self, cursor = None):
@@ -565,6 +578,20 @@ class PostgreSQLURLTable(BaseURLTable):
             self._url_block_url_index = {result[1]: (result[0], result[5]) for result in results}
             self._url_block_remaining_counter = len(results)
 
+            # Check for ignore pattern updates
+            if self._mutable_reject_regexes_filter:
+                with self._cursor() as cursor:
+                    cursor.execute('SELECT generation, op, pattern FROM ignore_patterns WHERE generation > %s', (self._ignore_pattern_generation,))
+                    updates = cursor.fetchall()
+                if updates:
+                    _logger.info('Updating ignore patterns from generation {} to {}'.format(self._ignore_pattern_generation, updates[-1][0]))
+                    for generation, op, pattern in updates:
+                        if op == 'add':
+                            self._mutable_reject_regexes_filter.add(pattern)
+                        else:
+                            self._mutable_reject_regexes_filter.remove(pattern)
+                    self._ignore_pattern_generation = updates[-1][0]
+
         # Pop a URL from the block and return it
         return self._url_block.popleft()
 
@@ -724,6 +751,9 @@ class PostgreSQLURLTable(BaseURLTable):
             result = cursor.fetchone()
             if result:
                 return result[0]
+
+    def set_mutable_reject_regexes_filter(self, filter):
+        self._mutable_reject_regexes_filter = filter
 
     def close(self):
         #TODO Unmark remaining items?
